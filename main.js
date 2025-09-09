@@ -10,6 +10,8 @@ let currentScreen = 'mainMenu';
 let playerCount = 2;
 let selectedAvatars = {};
 let playerNames = {};
+let pendingCardDraw = null;
+
 
 //  avatars
 const avatars = [
@@ -326,7 +328,7 @@ async function startGame() {
     }
 }
 
-// get emoji for token
+// get emoji 
 function getAvatarEmoji(tokenId) {
     const avatar = avatars.find(a => a.id === tokenId);
     return avatar ? avatar.emoji : '❓';
@@ -345,61 +347,129 @@ async function rollBothDice() {
         
         document.getElementById('rollDiceBtn').disabled = true;
 
-    
         const response = await apiCall(`/games/${currentGameId}/roll-dice`, {
             method: 'POST'
         });
 
-        const { dice, player, property, gameState: newGameState } = response.data;
+        const { dice, player, property, requiresCard, cardType, gameState: newGameState } = response.data;
 
-    
-setTimeout(async () => {
-    dice1.classList.remove('rolling');
-    dice2.classList.remove('rolling');
 
-    const faces = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
-    dice1.innerHTML = faces[dice.dice1 - 1];
-    dice2.innerHTML = faces[dice.dice2 - 1];
-    
-    gameStateLocal = 'DICE_ROLLED';
-    gameState = newGameState;
-    
-    //player movement
-    const movedPlayer = response.data.player;
-    await animatePlayerMovement(
-        movedPlayer.id, 
-        movedPlayer.oldPosition, 
-        movedPlayer.newPosition, 
-        movedPlayer.passedGo
-    );
-    
-    let statusText = `${player.name} rolled ${dice.total}!`;
-    if (player.passedGo) {
-        statusText += ` Passed GO and collected $200!`;
-    }
-    
-    // property modal 
-    if (property && (property.type === 'property' || property.type === 'railroad' || property.type === 'utility')) {
-        if (!property.owned) {
+        console.log(`DEBUG FRONTEND: Roll response received`);
+console.log(`DEBUG FRONTEND: Rent paid amount from server: $${response.data.rentPaid || 0}`);
+if (property && property.owned) {
+    console.log(`DEBUG FRONTEND: Property ${property.name} is owned by ${property.owner.name}`);
+    console.log(`DEBUG FRONTEND: Current player: ${player.name}`);
+}
+
+
+        setTimeout(async () => {
+            dice1.classList.remove('rolling');
+            dice2.classList.remove('rolling');
+
+            const faces = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
+            dice1.innerHTML = faces[dice.dice1 - 1];
+            dice2.innerHTML = faces[dice.dice2 - 1];
             
-            document.getElementById('propertyModalTitle').dataset.position = property.position;
-            showPropertyModal(property);
-            statusText += ` Landed on ${property.name} - Check the popup to buy!`;
-        } else {
-            statusText += ` Landed on ${property.name} (owned by ${property.owner.name})`;
-        }
-    } else if (property) {
-        statusText += ` Landed on ${property.name}`;
+            gameState = newGameState;
+
+
+             console.log(`DEBUG FRONTEND: Updated gameState received`);
+    const currentPlayer = gameState.players.find(p => p.id === gameState.current_player_id);
+    if (currentPlayer) {
+        console.log(`DEBUG FRONTEND: Current player ${currentPlayer.name} money after server update: $${currentPlayer.money}`);
+    }
+            
+            // player movement
+            const movedPlayer = response.data.player;
+            await animatePlayerMovement(
+                movedPlayer.id, 
+                movedPlayer.oldPosition, 
+                movedPlayer.newPosition, 
+                movedPlayer.passedGo
+            );
+            
+            let statusText = `${player.name} rolled ${dice.total}!`;
+            if (player.passedGo) {
+                statusText += ` Passed GO and collected $200!`;
+            }
+            
+
+             if (property && property.owned && property.owner.id !== movedPlayer.id) {
+
+//  rent payment 
+if (property && property.owned && property.owner.id !== movedPlayer.id && response.data.rentPaid > 0) {
+    const actualRentPaid = response.data.rentPaid;
+    console.log(`DEBUG FRONTEND: Processing rent payment of $${actualRentPaid}`);
+    
+    let rentMessage = `${player.name} paid $${actualRentPaid} rent to ${property.owner.name}`;
+    
+    if (property.type === 'utility') {
+        const multiplier = Math.floor(actualRentPaid / dice.total);
+        rentMessage = `${player.name} paid $${actualRentPaid} utility rent (${multiplier} × ${dice.total}) to ${property.owner.name}`;
     }
     
-    document.getElementById('turnStatus').textContent = statusText;
-    document.getElementById('endTurnBtn').disabled = false;
-    
-    console.log(`🎲 ${player.name} rolled: ${dice.dice1} + ${dice.dice2} = ${dice.total}`);
-    
-    // Update player display
-    showCurrentPlayerOnly();
-}, 1000);
+    statusText += ` - ${rentMessage}`;
+    console.log(`DEBUG FRONTEND: Showing rent modal with amount: $${actualRentPaid}`);
+    showRentModal(property, actualRentPaid, dice.total);
+} else if (property && property.owned && property.owner.id !== movedPlayer.id) {
+    console.log(`DEBUG FRONTEND: No rent paid - rent amount was: $${response.data.rentPaid || 0}`);
+}
+    }
+
+
+            // if requires card drawing
+            if (requiresCard && cardType) {
+                pendingCardDraw = cardType;
+                gameStateLocal = 'REQUIRES_CARD';
+                statusText += ` Landed on ${cardType.replace('_', ' ').toUpperCase()} - Draw a card!`;
+                
+                // show the card section
+                const cardSection = document.querySelector('.card-section');
+                const drawCardBtn = document.getElementById('drawCardBtn');
+                const cardTypeDisplay = document.getElementById('cardTypeDisplay');
+                
+                if (cardSection) cardSection.style.display = 'block';
+                if (drawCardBtn) {
+                    drawCardBtn.disabled = false;
+                    drawCardBtn.style.display = 'block';
+                }
+                if (cardTypeDisplay) {
+                    cardTypeDisplay.textContent = cardType.replace('_', ' ').toUpperCase();
+                }
+            } else if (property && (property.type === 'property' || property.type === 'railroad' || property.type === 'utility')) {
+                if (!property.owned) {
+                    gameStateLocal = 'DICE_ROLLED';
+                    document.getElementById('propertyModalTitle').dataset.position = property.position;
+                    showPropertyModal(property);
+                    statusText += ` Landed on ${property.name} - Check the popup to buy!`;
+                } else {
+                    gameStateLocal = 'DICE_ROLLED';
+                    statusText += ` Landed on ${property.name} (owned by ${property.owner.name})`;
+                }
+            } else {
+                gameStateLocal = 'DICE_ROLLED';
+                if (property) {
+                    statusText += ` Landed on ${property.name}`;
+                }
+            }
+            
+            document.getElementById('turnStatus').textContent = statusText;
+            
+            if (gameStateLocal === 'DICE_ROLLED') {
+                document.getElementById('endTurnBtn').disabled = false;
+            }
+            
+            console.log(`🎲 ${player.name} rolled: ${dice.dice1} + ${dice.dice2} = ${dice.total}`);
+            
+            // Update player display
+            showCurrentPlayerOnly();
+       
+
+        // Checking bankruptcy
+            if (response.data.bankruptcy) {
+                handleBankruptcyCheck(response.data.bankruptcy);
+            }
+        }, 1000);
 
     } catch (error) {
         console.error('Error rolling dice:', error);
@@ -460,18 +530,22 @@ function showCurrentPlayerOnly() {
     const currentPlayer = gameState.players.find(p => p.id === gameState.current_player_id);
     if (!currentPlayer) return;
     
+    console.log(`DEBUG DISPLAY: Updating display for ${currentPlayer.name} with $${currentPlayer.money}`);
+    
     const avatarInfo = avatars.find(avatar => avatar.id === currentPlayer.avatar);
     
     document.getElementById('currentPlayerDisplay').innerHTML = `
         <div class="player-avatar">${avatarInfo.emoji}</div>
         <div class="player-info">
             <h3>Player ${currentPlayer.order_id}: ${currentPlayer.name}</h3>
-            <p>Money: ${currentPlayer.money}</p>
+            <p>Money: $${currentPlayer.money}</p>
             <p>Properties: ${currentPlayer.properties.length > 0 ? currentPlayer.properties.map(p => p.name).join(", ") : 'None'}</p>
             <p>Mortgaged: ${currentPlayer.mortgaged_properties.length > 0 ? currentPlayer.mortgaged_properties.join(", ") : 'None'}</p>
             <p>Houses: ${currentPlayer.properties.reduce((sum, p) => sum + p.houses, 0)}, Hotels: ${currentPlayer.properties.reduce((sum, p) => sum + p.hotels, 0)}</p>
         </div>
     `;
+    
+    console.log(`DEBUG DISPLAY: Display updated for ${currentPlayer.name}`);
 }
 
 // Modal functions 
@@ -510,7 +584,7 @@ document.addEventListener('keydown', function(event) {
     }
 });
 
-// Initialize 
+// Initializing
 console.log('🎮 Monopoly Single Page App loaded with API integration!');
 
 // Test API connection 
@@ -526,7 +600,7 @@ async function testAPIConnection() {
 
 
 
-// Initialize player positions
+// Initializing player positions
 function initializePlayerPositions() {
     if (!gameState || !gameState.players) return;
     
@@ -586,10 +660,10 @@ async function animatePlayerMovement(playerId, fromPosition, toPosition, passedG
         // Calculate
         currentPos = (currentPos + 1) % 40;
         
-        // Update player's  position
+        // Updating player's  position
         updateSinglePlayerPosition(player, currentPos);
         
-        // Highlight GO if passed
+        // GO if passed
         if (currentPos === 0 && passedGo) {
             const goSquare = document.querySelector('.pos-0');
             goSquare.style.backgroundColor = '#27ae60';
@@ -698,6 +772,12 @@ async function buyProperty() {
  
         showCurrentPlayerOnly();
         initializePlayerPositions();
+
+        // BANKRUPTCY CHECK:
+        if (response.data.bankruptcy) {
+            handleBankruptcyCheck(response.data.bankruptcy);
+        }
+        
         
    
         const property = response.data.property;
@@ -712,6 +792,112 @@ async function buyProperty() {
 }
 
 
+async function drawCard() {
+    if (!currentGameId || !pendingCardDraw || gameStateLocal !== 'REQUIRES_CARD') return;
+    
+    try {
+        document.getElementById('drawCardBtn').disabled = true;
+        
+        const response = await apiCall(`/games/${currentGameId}/draw-card`, {
+            method: 'POST',
+            body: JSON.stringify({ cardType: pendingCardDraw })
+        });
+
+        const { card, actionResult, player, gameState: newGameState } = response.data;
+        
+        gameState = newGameState;
+        
+        // Show card modal
+        showCardModal(card, actionResult, player);
+        
+     
+        if (actionResult.newPosition !== undefined && actionResult.newPosition !== player.oldPosition) {
+            await animatePlayerMovement(
+                player.id,
+                player.oldPosition || 0,
+                actionResult.newPosition,
+                actionResult.passedGo
+            );
+        }
+        
+        // Update player display
+        showCurrentPlayerOnly();
+
+        if (response.data.bankruptcy) {
+            handleBankruptcyCheck(response.data.bankruptcy);
+        }
+        
+        
+        // Clear pending card draw
+        pendingCardDraw = null;
+        
+        console.log(`📋 Card drawn: ${card.title} - ${actionResult.message}`);
+
+    } catch (error) {
+        console.error('Error drawing card:', error);
+        document.getElementById('drawCardBtn').disabled = false;
+        alert('Failed to draw card. Please try again.');
+    }
+}
+
+
+function showCardModal(card, actionResult, player) {
+    const modal = document.getElementById('cardModal');
+    const title = document.getElementById('cardModalTitle');
+    const info = document.getElementById('cardModalInfo');
+    
+    title.textContent = card.title;
+    
+    let infoHTML = `
+        <div class="card-description" style="margin-bottom: 20px; font-size: 16px; text-align: center;">
+            "${card.description}"
+        </div>
+        <div class="card-result" style="font-size: 14px; color: #2c3e50;">
+            <strong>Result:</strong> ${actionResult.message}
+        </div>
+    `;
+    
+    if (actionResult.moneyChange !== 0) {
+        const changeText = actionResult.moneyChange > 0 ? 
+            `+$${actionResult.moneyChange}` : 
+            `-$${Math.abs(actionResult.moneyChange)}`;
+        const changeColor = actionResult.moneyChange > 0 ? '#27ae60' : '#e74c3c';
+        
+        infoHTML += `
+            <div class="money-change" style="color: ${changeColor}; font-weight: bold; margin-top: 10px;">
+                Money Change: ${changeText}
+            </div>
+        `;
+    }
+    
+    info.innerHTML = infoHTML;
+    modal.style.display = 'block';
+}
+
+function closeCardModal() {
+    document.getElementById('cardModal').style.display = 'none';
+    
+   
+    const cardSection = document.querySelector('.card-section');
+    const drawCardBtn = document.getElementById('drawCardBtn');
+    
+    if (cardSection) cardSection.style.display = 'none';
+    if (drawCardBtn) drawCardBtn.style.display = 'none';
+    
+ 
+    gameStateLocal = 'DICE_ROLLED';
+    document.getElementById('endTurnBtn').disabled = false;
+}
+
+// Add event listener for the close card button
+document.addEventListener('DOMContentLoaded', function() {
+    const closeCardBtn = document.getElementById('closeCardBtn');
+    if (closeCardBtn) {
+        closeCardBtn.onclick = closeCardModal;
+    }
+});
+
+
 document.getElementById('buyPropertyBtn').onclick = buyProperty;
 document.getElementById('closePropertyBtn').onclick = closePropertyModal;
 
@@ -720,6 +906,7 @@ window.onclick = function(event) {
     const rulesModal = document.getElementById('rulesModal');
     const exitModal = document.getElementById('confirmExitModal');
     const propertyModal = document.getElementById('propertyModal');
+    const cardModal = document.getElementById('cardModal');
     
     if (event.target === rulesModal) {
         closeRulesModal();
@@ -730,7 +917,182 @@ window.onclick = function(event) {
     if (event.target === propertyModal) {
         closePropertyModal();
     }
+    if (event.target === cardModal) {
+        closeCardModal();
+    }
 }
 
 
+
+
+
+function showRentModal(property, rentAmount, diceTotal = 0) {
+    
+    let modal = document.getElementById('rentModal');
+    if (!modal) {
+        modal = createRentModal();
+    }
+    
+    const title = document.getElementById('rentModalTitle');
+    const info = document.getElementById('rentModalInfo');
+    
+    title.textContent = `Rent Payment Required`;
+    
+    let rentCalculation = '';
+    if (property.type === 'utility') {
+        const multiplier = rentAmount / diceTotal;
+        rentCalculation = ` (${multiplier} × ${diceTotal})`;
+    }
+    
+    info.innerHTML = `
+        <div class="rent-info">
+            <h4>${property.name}</h4>
+            <p><strong>Owner:</strong> ${property.owner.name}</p>
+            <p><strong>Rent:</strong> $${rentAmount}${rentCalculation}</p>
+            <p class="rent-payment">You paid $${rentAmount} in rent!</p>
+        </div>
+    `;
+    
+    modal.style.display = 'block';
+    
+    // rent-modal-Auto-close after 3 seconds
+    setTimeout(() => {
+        closeRentModal();
+    }, 3000);
+}
+
+function createRentModal() {
+    const modal = document.createElement('div');
+    modal.id = 'rentModal';
+    modal.className = 'modal';
+    modal.innerHTML = `
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="rentModalTitle">Rent Payment</h2>
+                <span class="close" onclick="closeRentModal()">&times;</span>
+            </div>
+            <div class="modal-body" id="rentModalInfo"></div>
+            <div class="modal-footer">
+                <button onclick="closeRentModal()" class="btn btn-primary">OK</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+    return modal;
+}
+
+function closeRentModal() {
+    const modal = document.getElementById('rentModal');
+    if (modal) {
+        modal.style.display = 'none';
+    }
+}
+
+function addDebugMessage(message, type = 'info') {
+    console.log(`[${type.toUpperCase()}] ${message}`);
+    
+}
+
+
+
+function handleBankruptcyCheck(bankruptcyResult) {
+    if (!bankruptcyResult) return;
+    
+    //  bankruptcies
+    if (bankruptcyResult.bankruptcyResults && bankruptcyResult.bankruptcyResults.length > 0) {
+        for (const bankruptcy of bankruptcyResult.bankruptcyResults) {
+            if (bankruptcy.isBankrupt) {
+                console.log(`Player ${bankruptcy.playerName} is bankrupt!`);
+                showBankruptcyModal(bankruptcy.playerName);
+            }
+        }
+    }
+    
+    //  game end
+    if (bankruptcyResult.gameEnded && bankruptcyResult.winner) {
+        setTimeout(() => {
+            showWinnerModal(bankruptcyResult.winner.name);
+        }, 2000); 
+    }
+}
+
+function showBankruptcyModal(playerName) {
+    const modal = createBankruptcyModal(playerName);
+    document.body.appendChild(modal);
+    modal.style.display = 'block';
+    
+    // Auto-close after 3 seconds
+    setTimeout(() => {
+        closeBankruptcyModal();
+    }, 3000);
+}
+
+function showWinnerModal(winnerName) {
+    const modal = createWinnerModal(winnerName);
+    document.body.appendChild(modal);
+    modal.style.display = 'block';
+}
+
+function createBankruptcyModal(playerName) {
+    const modal = document.createElement('div');
+    modal.id = 'bankruptcyModal';
+    modal.className = 'modal';
+    modal.innerHTML = `
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>💸 Bankruptcy!</h2>
+            </div>
+            <div class="modal-body">
+                <p style="font-size: 18px; text-align: center;">
+                    <strong>${playerName}</strong> has gone bankrupt!
+                </p>
+                <p style="text-align: center; color: #e74c3c;">
+                    (Money fell below $200)
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button onclick="closeBankruptcyModal()" class="btn btn-primary">Continue</button>
+            </div>
+        </div>
+    `;
+    return modal;
+}
+
+function createWinnerModal(winnerName) {
+    const modal = document.createElement('div');
+    modal.id = 'winnerModal';
+    modal.className = 'modal';
+    modal.innerHTML = `
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>🎉 Game Over!</h2>
+            </div>
+            <div class="modal-body">
+                <p style="font-size: 24px; text-align: center; color: #27ae60;">
+                    <strong>${winnerName} Wins!</strong>
+                </p>
+                <p style="text-align: center;">
+                    Congratulations! You are the last player standing!
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button onclick="showMainMenu()" class="btn btn-primary">New Game</button>
+            </div>
+        </div>
+    `;
+    return modal;
+}
+
+function closeBankruptcyModal() {
+    const modal = document.getElementById('bankruptcyModal');
+    if (modal) {
+        modal.remove();
+    }
+}
+
 testAPIConnection();
+
+//netstat -ano | findstr :3000
+  //TCP    0.0.0.0:3000           0.0.0.0:0              LISTENING       21136
+  //TCP    [::]:3000              [::]:0                 LISTENING       21136
+// taskkill /PID 21136 /F
