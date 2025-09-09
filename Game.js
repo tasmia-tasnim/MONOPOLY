@@ -215,35 +215,39 @@ class Game {
 
   
     async delete() {
-        const connection = await db.getConnection();
-        try {
-            await connection.beginTransaction();
+    const connection = await db.getConnection();
+    try {
+        await connection.beginTransaction();
 
-         
-            await connection.execute(`
-                DELETE pp FROM player_properties pp
-                JOIN players p ON pp.player_id = p.id
-                WHERE p.game_id = ?
-            `, [this.id]);
+        
+        await connection.execute(
+            'UPDATE games SET current_player = NULL WHERE id = ?', 
+            [this.id]
+        );
 
-          
-            await connection.execute('DELETE FROM players WHERE game_id = ?', [this.id]);
+       
+        await connection.execute(`
+            DELETE pp FROM player_properties pp
+            JOIN players p ON pp.player_id = p.id
+            WHERE p.game_id = ?
+        `, [this.id]);
 
-          
-            await connection.execute('DELETE FROM games WHERE id = ?', [this.id]);
+       
+        await connection.execute('DELETE FROM players WHERE game_id = ?', [this.id]);
 
-            await connection.commit();
-            return true;
-        } catch (error) {
-            await connection.rollback();
-            console.error('Error deleting game:', error);
-            throw error;
-        } finally {
-            connection.release();
-        }
+       
+        await connection.execute('DELETE FROM games WHERE id = ?', [this.id]);
+
+        await connection.commit();
+        return true;
+    } catch (error) {
+        await connection.rollback();
+        console.error('Error deleting game:', error);
+        throw error;
+    } finally {
+        connection.release();
     }
-
-
+}
     async getStatistics() {
         try {
             const players = await this.getPlayers();
@@ -281,6 +285,110 @@ class Game {
             throw error;
         }
     }
+
+    
+
+async checkForBankruptcy() {
+    try {
+        const players = await this.getPlayers();
+        const activePlayers = players.filter(p => !p.is_bankrupt);
+        
+        console.log(`DEBUG BANKRUPTCY: Checking bankruptcy for ${activePlayers.length} active players`);
+        
+        const bankruptcyResults = [];
+        
+        for (const player of activePlayers) {
+            if (player.isBankrupt()) {
+                console.log(`DEBUG BANKRUPTCY: Player ${player.name} is bankrupt (money: $${player.money})`);
+                await player.markAsBankrupt();
+                bankruptcyResults.push({
+                    playerId: player.id,
+                    playerName: player.name,
+                    isBankrupt: true
+                });
+            }
+        }
+        
+      
+        const remainingPlayers = activePlayers.filter(p => !p.isBankrupt());
+        console.log(`DEBUG BANKRUPTCY: ${remainingPlayers.length} players remaining after bankruptcy check`);
+        
+        if (remainingPlayers.length === 1) {
+           
+            await this.endGame(remainingPlayers[0]);
+            return {
+                bankruptcyResults,
+                gameEnded: true,
+                winner: remainingPlayers[0]
+            };
+        }
+        
+        return {
+            bankruptcyResults,
+            gameEnded: false,
+            winner: null
+        };
+        
+    } catch (error) {
+        console.error('Error checking for bankruptcy:', error);
+        throw error;
+    }
+}
+
+async endGame(winner) {
+    try {
+        await db.execute(
+            'UPDATE games SET status = ?, winner_id = ?, current_player = NULL WHERE id = ?',
+            ['finished', winner.id, this.id]
+        );
+        this.status = 'finished';
+        this.winner_id = winner.id;
+        this.current_player = null;
+        console.log(`DEBUG BANKRUPTCY: Game ended - Winner: ${winner.name}`);
+    } catch (error) {
+        console.error('Error ending game:', error);
+        throw error;
+    }
+}
+
+async getActivePlayers() {
+    try {
+        const players = await Player.findByGameId(this.id);
+        return players.filter(p => !p.is_bankrupt);
+    } catch (error) {
+        console.error('Error getting active players:', error);
+        throw error;
+    }
+}
+
+async nextTurn() {
+    try {
+        const activePlayers = await this.getActivePlayers();
+        const currentPlayerIndex = activePlayers.findIndex(p => p.id === this.current_player);
+        
+        if (currentPlayerIndex === -1) {
+            throw new Error('Current player not found or is bankrupt');
+        }
+
+        const nextPlayerIndex = (currentPlayerIndex + 1) % activePlayers.length;
+        const nextPlayer = activePlayers[nextPlayerIndex];
+
+        await db.execute(
+            'UPDATE games SET current_player = ? WHERE id = ?',
+            [nextPlayer.id, this.id]
+        );
+
+        this.current_player = nextPlayer.id;
+        return nextPlayer;
+    } catch (error) {
+        console.error('Error switching to next player:', error);
+        throw error;
+    }
+}
+
+
+
+
 }
 
 module.exports = Game;
