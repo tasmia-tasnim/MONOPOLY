@@ -1,6 +1,8 @@
 const Game = require('../models/Game');
 const Player = require('../models/Player');
 const Property = require('../models/Property');
+const Card = require('../models/Card');
+const db = require('../config/database');
 
 class GameController {
 
@@ -15,7 +17,6 @@ class GameController {
                 });
             }
 
-         
             for (let player of players) {
                 if (!player.name || !player.avatar) {
                     return res.status(400).json({
@@ -29,13 +30,9 @@ class GameController {
             const gameId = await Game.create();
             const game = await Game.findById(gameId);
 
-        
             await game.addPlayers(players);
-
-        
             await game.start();
 
-           
             const gameState = await game.getCompleteGameState();
 
             res.status(201).json({
@@ -52,8 +49,16 @@ class GameController {
                 error: error.message
             });
         }
-    }
 
+        
+        const [existingGames] = await db.execute('SELECT id FROM games');
+        for (const game of existingGames) {
+            const gameInstance = await Game.findById(game.id);
+            if (gameInstance) {
+                
+            }
+        }
+    }
 
     static async getGameState(req, res) {
         try {
@@ -84,7 +89,6 @@ class GameController {
         }
     }
 
-    
     static async rollDice(req, res) {
         try {
             const { gameId } = req.params;
@@ -112,37 +116,133 @@ class GameController {
                 });
             }
 
-           
             const dice1 = Math.floor(Math.random() * 6) + 1;
             const dice2 = Math.floor(Math.random() * 6) + 1;
             const total = dice1 + dice2;
             const isDoubles = dice1 === dice2;
 
-            
+            console.log(`DEBUG: ${currentPlayer.name} rolling - Position: ${currentPlayer.position}, Money: $${currentPlayer.money}`);
 
-let newPosition = (currentPlayer.position + total) % 40;
+            let newPosition = (currentPlayer.position + total) % 40;
+            let passedGo = false;
 
+            // Check if passed GO
+            if ((currentPlayer.position + total) >= 40) {
+                passedGo = true;
+                console.log(`DEBUG: ${currentPlayer.name} passing GO - Money before: $${currentPlayer.money}`);
+                await currentPlayer.addMoney(200);
+                await currentPlayer.refresh();
+                console.log(`DEBUG: ${currentPlayer.name} after passing GO - Money after: $${currentPlayer.money}`);
+            }
 
-let passedGo = false;
-if (!currentPlayer.first_turn && (currentPlayer.position + total) >= 40) {
-    passedGo = true;
-    await currentPlayer.addMoney(200);
-}
-
-
-if (currentPlayer.first_turn) {
-    await currentPlayer.setFirstTurnComplete();
-}
-
-
-
-         
+            // Update player position
             await currentPlayer.updatePosition(newPosition);
 
-          
+            // Get property at new position
             const property = await Property.findByPosition(newPosition);
             const propertyWithOwnership = property ? await property.getPropertyWithOwnership() : null;
 
+            console.log(`DEBUG: ${currentPlayer.name} landed on position ${newPosition}: ${property ? property.name : 'No property'}`);
+
+            let rentPaid = 0;
+
+            //  rent payment for owned properties
+            if (property && propertyWithOwnership.owned && propertyWithOwnership.owner.id !== currentPlayer.id) {
+                console.log(`DEBUG RENT: ${currentPlayer.name} landed on ${property.name} owned by ${propertyWithOwnership.owner.name}`);
+                console.log(`DEBUG RENT: Property type: ${property.type}`);
+                console.log(`DEBUG RENT: ${currentPlayer.name} money BEFORE rent payment: $${currentPlayer.money}`);
+                
+                try {
+                    let rentAmount = 0;
+
+                    if (property.type === 'utility') {
+                        rentAmount = await property.calculateUtilityRent(total);
+                        console.log(`DEBUG RENT: Utility rent calculated: $${rentAmount} (dice total: ${total})`);
+                    } else {
+                        rentAmount = await property.calculateRent();
+                        console.log(`DEBUG RENT: Property rent calculated: $${rentAmount}`);
+                    }
+
+                    if (rentAmount > 0 && !propertyWithOwnership.owner.is_mortgaged) {
+                        rentPaid = rentAmount;
+                        
+                        // Deduct money from current player
+                        console.log(`DEBUG RENT: Deducting $${rentPaid} from ${currentPlayer.name}`);
+                        await currentPlayer.subtractMoney(rentPaid);
+                        await currentPlayer.refresh();
+                        
+                        // Add money to owner
+                        const ownerPlayer = await Player.findById(propertyWithOwnership.owner.id);
+                        console.log(`DEBUG RENT: Owner ${ownerPlayer.name} money BEFORE receiving rent: $${ownerPlayer.money}`);
+                        await ownerPlayer.addMoney(rentPaid);
+                        await ownerPlayer.refresh();
+                        console.log(`DEBUG RENT: Owner ${ownerPlayer.name} money AFTER receiving rent: $${ownerPlayer.money}`);
+                        
+                        console.log(`DEBUG RENT: ${currentPlayer.name} paid rent - Amount: $${rentPaid}`);
+                    } else if (propertyWithOwnership.owner.is_mortgaged) {
+                        console.log(`DEBUG RENT: Property is mortgaged - no rent collected`);
+                    } else {
+                        console.log(`DEBUG RENT: Rent amount is 0 - no payment required`);
+                    }
+                    
+                } catch (rentError) {
+                    console.error('Error calculating/paying rent:', rentError);
+                }
+                
+                await currentPlayer.refresh();
+                console.log(`DEBUG RENT: ${currentPlayer.name} money AFTER paying rent: $${currentPlayer.money}`);
+            }
+
+            
+
+            // Check if landed on Chance or Community Chest
+            let requiresCard = false;
+            let cardType = null;
+            
+            if (property && property.type === 'chance') {
+                requiresCard = true;
+                cardType = 'chance';
+            } else if (property && property.type === 'community_chest') {
+                requiresCard = true;
+                cardType = 'community_chest';
+            }
+
+            //tax properties
+            if (property && property.type === 'tax') {
+                let taxAmount = 0;
+                if (property.name.includes('Income Tax')) {
+                    taxAmount = 200;
+                } else if (property.name.includes('Luxury Tax')) {
+                    taxAmount = 100;
+                }
+                
+                if (taxAmount > 0) {
+                    console.log(`DEBUG: ${currentPlayer.name} paying tax - Money before: $${currentPlayer.money}`);
+                    await currentPlayer.subtractMoney(taxAmount);
+                    await currentPlayer.refresh();
+                    console.log(`DEBUG: ${currentPlayer.name} after tax - Money after: $${currentPlayer.money}, Tax paid: $${taxAmount}`);
+                }
+            }
+
+            
+            // Build response message
+            let statusText = `${currentPlayer.name} rolled ${dice1} + ${dice2} = ${total}!`;
+            if (passedGo) {
+                statusText += ` Passed GO and collected $200!`;
+            }
+
+            if (rentPaid > 0) {
+                let rentMessage = `${currentPlayer.name} paid $${rentPaid} rent to ${propertyWithOwnership.owner.name}`;
+                
+                if (property.type === 'utility') {
+                    const multiplier = Math.floor(rentPaid / total);
+                    rentMessage = `${currentPlayer.name} paid $${rentPaid} utility rent (${multiplier} × ${total}) to ${propertyWithOwnership.owner.name}`;
+                }
+                
+                statusText += ` - ${rentMessage}`;
+            }
+             
+            const bankruptcyResult = await game.checkForBankruptcy();
             res.json({
                 success: true,
                 message: 'Dice rolled successfully',
@@ -157,6 +257,10 @@ if (currentPlayer.first_turn) {
                         passedGo
                     },
                     property: propertyWithOwnership,
+                    rentPaid: rentPaid,
+                    requiresCard,
+                    cardType,
+                    bankruptcy: bankruptcyResult,
                     gameState: await game.getCompleteGameState()
                 }
             });
@@ -170,7 +274,6 @@ if (currentPlayer.first_turn) {
             });
         }
     }
-
 
     static async endTurn(req, res) {
         try {
@@ -217,7 +320,6 @@ if (currentPlayer.first_turn) {
         }
     }
 
-
     static async buyProperty(req, res) {
         try {
             const { gameId } = req.params;
@@ -254,7 +356,6 @@ if (currentPlayer.first_turn) {
                 });
             }
 
-           
             if (await property.isOwned()) {
                 return res.status(400).json({
                     success: false,
@@ -294,7 +395,6 @@ if (currentPlayer.first_turn) {
         }
     }
 
-  
     static async getProperty(req, res) {
         try {
             const { propertyId } = req.params;
@@ -323,7 +423,6 @@ if (currentPlayer.first_turn) {
             });
         }
     }
-
 
     static async mortgageProperty(req, res) {
         try {
@@ -369,7 +468,6 @@ if (currentPlayer.first_turn) {
         }
     }
 
-  
     static async buildHouse(req, res) {
         try {
             const { gameId } = req.params;
@@ -414,7 +512,6 @@ if (currentPlayer.first_turn) {
         }
     }
 
- 
     static async deleteGame(req, res) {
         try {
             const { gameId } = req.params;
@@ -444,7 +541,6 @@ if (currentPlayer.first_turn) {
         }
     }
 
-
     static async getGameStatistics(req, res) {
         try {
             const { gameId } = req.params;
@@ -473,6 +569,137 @@ if (currentPlayer.first_turn) {
             });
         }
     }
+
+    static async drawCard(req, res) {
+        try {
+            const { gameId } = req.params;
+            const { cardType } = req.body; 
+            
+            const game = await Game.findById(gameId);
+            if (!game) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Game not found'
+                });
+            }
+
+            if (game.status !== 'active') {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Game is not active'
+                });
+            }
+
+            const currentPlayer = await game.getCurrentPlayer();
+            if (!currentPlayer) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'No current player found'
+                });
+            }
+
+            // Validate card type
+            if (!cardType || (cardType !== 'chance' && cardType !== 'community_chest')) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid card type'
+                });
+            }
+
+            // Get random card
+            const card = await Card.getRandomCard(cardType);
+            if (!card) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'No cards found for this type'
+                });
+            }
+
+            // Execute card action
+            const actionResult = await card.executeAction(currentPlayer.id, gameId);
+            
+            // Get updated game state
+            const gameState = await game.getCompleteGameState();
+
+            res.json({
+                success: true,
+                message: 'Card drawn successfully',
+                data: {
+                    card: {
+                        title: card.title,
+                        description: card.description,
+                        type: card.type
+                    },
+                    actionResult,
+                    player: {
+                        id: currentPlayer.id,
+                        name: currentPlayer.name,
+                        oldPosition: actionResult.newPosition !== currentPlayer.position ? currentPlayer.position : null,
+                        newPosition: actionResult.newPosition,
+                        money: currentPlayer.money + actionResult.moneyChange,
+                        moneyChange: actionResult.moneyChange,
+                        passedGo: actionResult.passedGo
+                    },
+                    gameState
+                }
+            });
+
+        } catch (error) {
+            console.error('Error drawing card:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to draw card',
+                error: error.message
+            });
+        }
+    }
+
+    
+
+static async checkBankruptcy(req, res) {
+    try {
+        const { gameId } = req.params;
+        
+        const game = await Game.findById(gameId);
+        if (!game) {
+            return res.status(404).json({
+                success: false,
+                message: 'Game not found'
+            });
+        }
+
+        if (game.status !== 'active') {
+            return res.status(400).json({
+                success: false,
+                message: 'Game is not active'
+            });
+        }
+
+        const bankruptcyResult = await game.checkForBankruptcy();
+        const gameState = await game.getCompleteGameState();
+
+        res.json({
+            success: true,
+            message: 'Bankruptcy check completed',
+            data: {
+                ...bankruptcyResult,
+                gameState
+            }
+        });
+
+    } catch (error) {
+        console.error('Error checking bankruptcy:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to check bankruptcy',
+            error: error.message
+        });
+    }
+}
+
+
+
+
 }
 
 module.exports = GameController;
