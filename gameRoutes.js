@@ -18,4 +18,11 @@ router.post('/:gameId/build-house', GameController.buildHouse);
 // Property 
 router.get('/property/:propertyId', GameController.getProperty);
 
+// Card actions
+router.post('/:gameId/draw-card', GameController.drawCard);
+
+
+router.post('/:gameId/check-bankruptcy', GameController.checkBankruptcy);
+
+
 module.exports = router;
