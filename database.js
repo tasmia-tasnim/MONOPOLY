@@ -1,7 +1,7 @@
 const mysql = require('mysql2/promise');
 require('dotenv').config();
 
-// Database config
+// Database config 
 const dbConfig = {
     host: process.env.DB_HOST || 'localhost',
     port: process.env.DB_PORT || 3306,
@@ -11,27 +11,54 @@ const dbConfig = {
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,
-    acquireTimeout: 60000,
-    timeout: 60000,
-    reconnect: true
+ 
+    
+
+    keepAliveInitialDelay: 0,
+    enableKeepAlive: true,
+    idleTimeout: 600000, 
+    acquireTimeout: 60000, 
 };
 
-// Create connection 
+// Creating connection pool
 const pool = mysql.createPool(dbConfig);
 
-// Test 
+
+pool.on('connection', (connection) => {
+    console.log('New connection established as id ' + connection.threadId);
+});
+
+pool.on('error', (err) => {
+    console.error('Database pool error:', err);
+    if (err.code === 'PROTOCOL_CONNECTION_LOST') {
+        console.log('Database connection lost, pool will reconnect automatically');
+    } else {
+        console.error('Database error:', err);
+    }
+});
+
+// Test connection function
 async function testConnection() {
     try {
         const connection = await pool.getConnection();
+        await connection.execute('SELECT 1');
         console.log('✅ Database connected successfully');
         connection.release();
+        return true;
     } catch (error) {
         console.error('❌ Database connection failed:', error.message);
-        throw error;
+        return false;
     }
 }
 
-
+// Test connection on startup
 testConnection();
+
+//  shutdown
+process.on('SIGINT', async () => {
+    console.log('Closing database connections...');
+    await pool.end();
+    process.exit(0);
+});
 
 module.exports = pool;
