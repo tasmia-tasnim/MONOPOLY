@@ -11,21 +11,26 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve static files from frontend
+// Serve static 
 app.use(express.static(path.join(__dirname, '../frontend')));
 
-// API Routes - COMMENTED OUT TO TEST
- app.use('/api/games', gameRoutes);
-
-// Test database connection route - COMMENTED OUT TO TEST
+// API Routes 
+app.get('/api/health', (req, res) => {
+    res.json({ 
+        success: true, 
+        message: 'Server is running',
+        timestamp: new Date().toISOString()
+    });
+});
 
 app.get('/api/test-db', async (req, res) => {
     try {
         const db = require('./config/database');
-        await db.execute('SELECT 1');
+        const [result] = await db.execute('SELECT 1 as test');
         res.json({ 
             success: true, 
-            message: 'Database connection successful' 
+            message: 'Database connection successful',
+            result: result
         });
     } catch (error) {
         console.error('Database connection error:', error);
@@ -37,19 +42,15 @@ app.get('/api/test-db', async (req, res) => {
     }
 });
 
+// Game routes
+app.use('/api/games', gameRoutes);
 
-// Health check route - FIXED: removed full URL, just use path
-app.get('/api/health', (req, res) => {
-    res.json({ 
-        success: true, 
-        message: 'Server is running',
-        timestamp: new Date().toISOString()
+// 404 handler for API routes
+app.use('/api/*', (req, res) => {
+    res.status(404).json({
+        success: false,
+        message: `API endpoint not found: ${req.originalUrl}`
     });
-});
-
-// Catch all route - serve frontend
-app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '../frontend/index.html'));
 });
 
 // Error handling middleware
@@ -62,12 +63,9 @@ app.use((error, req, res, next) => {
     });
 });
 
-// 404 handler for API routes
-app.use('/api/*', (req, res) => {
-    res.status(404).json({
-        success: false,
-        message: 'API endpoint not found'
-    });
+
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, '../frontend/index.html'));
 });
 
 // Start server
@@ -77,6 +75,15 @@ app.listen(PORT, () => {
     console.log(`🔌 API: http://localhost:${PORT}/api`);
     console.log(`🔧 Health Check: http://localhost:${PORT}/api/health`);
     console.log(`💾 DB Test: http://localhost:${PORT}/api/test-db`);
+    
+    // Test database 
+    const db = require('./config/database');
+});
+
+
+process.on('SIGINT', () => {
+    console.log('\n🛑 Server shutting down...');
+    process.exit(0);
 });
 
 module.exports = app;
