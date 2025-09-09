@@ -285,6 +285,52 @@ class Player {
             throw error;
         }
     }
+    async refresh() {
+    try {
+        const [rows] = await db.execute(
+            'SELECT * FROM players WHERE id = ?',
+            [this.id]
+        );
+        if (rows.length > 0) {
+            const data = rows[0];
+            this.money = data.money;
+            this.position = data.position;
+            this.jail = data.jail;
+            
+        }
+    } catch (error) {
+        console.error('Error refreshing player:', error);
+        throw error;
+    }
+}
+
+
+async addMoney(amount) {
+    const newMoney = this.money + amount;
+    await this.updateMoney(newMoney);
+    this.money = newMoney; 
+    return newMoney;
+}
+
+async markAsBankrupt() {
+    try {
+        await db.execute(
+            'UPDATE players SET is_bankrupt = true WHERE id = ?',
+            [this.id]
+        );
+        this.is_bankrupt = true;
+        console.log(`DEBUG BANKRUPTCY: Player ${this.name} marked as bankrupt`);
+    } catch (error) {
+        console.error('Error marking player as bankrupt:', error);
+        throw error;
+    }
+}
+
+isBankrupt() {
+    return this.money < 1000;
+}
+
+
 }
 
 module.exports = Player;
