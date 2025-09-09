@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Monopoly Game</title>
@@ -425,7 +424,20 @@
                     </div>
                     
                     <div class="current-player-display" id="currentPlayerDisplay">
+
+                    
+
                         <!-- Current player  -->
+                    </div>
+
+                     <!-- Card section  -->
+                    <div class="card-section" style="display: none;">
+                        <div class="card-instruction">
+                            <span id="cardTypeDisplay">CHANCE</span> Card Required
+                        </div>
+                        <button class="turn-btn draw-card-btn" id="drawCardBtn" onclick="drawCard()" disabled style="display: none;">
+                            Draw Card
+                        </button>
                     </div>
                     
                     <div class="turn-buttons">
@@ -436,7 +448,7 @@
                             End Turn
                         </button>
                     </div>
-                </div>
+                
 
                 <!-- Confirmation Modal -->
                 <div id="confirmExitModal" class="modal">
@@ -475,6 +487,24 @@
                         </div>
                     </div>
                 </div>
+                <!-- Card Modal -->
+                <div id="cardModal" class="property-modal">
+                    <div class="property-modal-content">
+                        <div class="property-modal-header">
+                            <h2 class="property-modal-title" id="cardModalTitle">Card Title</h2>
+                        </div>
+                        <div class="property-modal-body">
+                            <div id="cardModalInfo">
+                                <!-- Card info -->
+                            </div>
+                        </div>
+                        <div class="property-modal-footer">
+                            <button class="property-modal-btn close-property-btn" id="closeCardBtn">
+                                Continue
+                            </button>
+                        </div>
+                    </div>
+                </div>
 
 
             </div>
@@ -485,3 +515,7 @@
      <script src="js/main.js"></script>
 </body>
 </html>
+
+
+ 
+
